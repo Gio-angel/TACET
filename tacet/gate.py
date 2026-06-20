@@ -8,14 +8,7 @@
 import config as C
 
 
-def should_respond(prob: float, tau: float = None) -> bool:
-    """Decide whether to take the turn.
-
-    prob : P(complete) from the head, in [0, 1].
-    tau  : threshold (defaults to config.TAU, currently 0.5).
-    Returns True  -> user is done, go respond.
-            False -> still mid-utterance, keep listening.
-    """
+def should_respond(prob: float, tau: float = None):
     if tau is None:
         tau = C.TAU
     return prob >= tau

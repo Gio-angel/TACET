@@ -1,25 +1,14 @@
-# --- Python ---
+# Created by venv; see https://docs.python.org/3/library/venv.html
+
+Include/
+Lib/
+scripts/
+share/
+pyvenv.cfg
+artifacts/plots/
+artifacts/plots_finetune/
+artifacts/tacet_head.pt
+
 __pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-
-# --- Virtual environments ---
-.venv/
-venv/
-env/
-.python-version
-
-
-data/*.npz
-
-artifacts/*.pt
-*.ckpt
-*.pt
-
-
-
-# --- Editors / IDE ---
-.vscode/
+*.pyc
+.pytest_cache/

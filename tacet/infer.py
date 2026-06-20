@@ -18,10 +18,24 @@ class TacetEndpointer:
         self.tau = C.TAU if tau is None else tau
 
     def probability(self, emb: np.ndarray) -> float:
-        """emb: [768] -> P(complete)."""
         return float(self.model.score(emb)[0])
 
     def take_turn(self, emb: np.ndarray) -> bool:
         """True  -> user finished, respond.
         False -> still mid-utterance, keep listening."""
         return should_respond(self.probability(emb), self.tau)
+    
+    
+    
+def run_model_inference(embedding: np.ndarray) -> bool:
+
+    if embedding is None or embedding.size == 0:
+        raise ValueError("Inference input embedding cannot be None or empty.")
+        
+    if embedding.shape[-1] != C.EMB_DIM:
+        raise ValueError(f"Embedding dimension mismatch. Expected {C.EMB_DIM}.")
+
+    # If it gets past the checks, it is guaranteed safe to calculate
+    endpointer = TacetEndpointer()
+    prob = endpointer.probability(embedding)
+    return should_respond(prob, C.TAU)

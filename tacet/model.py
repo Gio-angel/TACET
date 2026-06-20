@@ -1,11 +1,3 @@
-# model.py
-# The TACET head: the little network we actually train, and the only learned part
-# of the whole project. It sits on top of frozen BERT — a 768-d [CLS] vector goes
-# in, and P(complete) comes out, i.e. how likely it is the user has finished their
-# turn. We keep the sigmoid inside the model so forward() returns a probability
-# directly; that's why training uses plain BCELoss (see scripts/train.py).
-# Label convention everywhere: 1 = complete (take the turn), 0 = incomplete.
-# Where it fits: stage 4 of the pipeline, the classifier head.
 import numpy as np
 import torch
 import torch.nn as nn
