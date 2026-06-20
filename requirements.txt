@@ -1,0 +1,17 @@
+
+# --- UI (local web UI in a native window) ---
+pywebview
+
+# --- ASR: lighter / faster than openai-whisper ---
+faster-whisper
+
+# --- microphone capture ---
+sounddevice
+numpy
+
+# --- frozen BERT encoder ---
+torch
+transformers
+
+# --- packaging  ---
+# pyinstaller

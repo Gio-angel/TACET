@@ -1,0 +1,125 @@
+# asr.py
+# live speech -> text.
+# Captures the microphone with sounddevice and transcribes with faster-whisper.
+
+import threading
+import time
+from pathlib import Path
+
+import numpy as np
+
+from tacet.preprocess import normalize
+
+SAMPLE_RATE = 16000          # what Whisper expects
+PARTIAL_EVERY = 1.0          # seconds between partial transcriptions
+MIN_SECONDS = 0.3            # ignore buffers shorter than this
+
+
+class LiveTranscriber:
+    """Microphone -> faster-whisper. Calls callbacks with normalized text.
+
+    on_partial(text)  : growing transcript while the user speaks
+    on_final(text)    : the transcript when recording stops
+    on_status(text)   : human-readable status messages (model loading, errors)
+    """
+
+    def __init__(self, on_partial=None, on_final=None, on_status=None,
+                 model_size="base", model_dir=None, device="cpu",
+                 compute_type="int8", partial_every=PARTIAL_EVERY):
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self.on_status = on_status
+        self.model_size = model_size
+        self.model_dir = model_dir
+        self.device = device
+        self.compute_type = compute_type
+        self.partial_every = partial_every
+
+        self._model = None
+        self._stream = None
+        self._buf = []
+        self._lock = threading.Lock()
+        self._running = False
+        self._worker = None
+
+    # ---- helpers ----
+    def _status(self, msg):
+        if self.on_status:
+            self.on_status(msg)
+
+    def _load_model(self):
+        from faster_whisper import WhisperModel
+        src = self.model_size
+        if self.model_dir and Path(self.model_dir).exists():
+            src = str(self.model_dir)            # packaged / offline path
+        self._status(f"loading whisper ({src})…")
+        self._model = WhisperModel(src, device=self.device,
+                                   compute_type=self.compute_type)
+        self._status("model ready")
+
+    def _transcribe(self, audio, final=False):
+        segments, _ = self._model.transcribe(
+            audio, language="en", beam_size=5 if final else 1,
+            vad_filter=True,
+        )
+        return " ".join(seg.text for seg in segments).strip()
+
+    def _current_audio(self):
+        with self._lock:
+            if not self._buf:
+                return None
+            return np.concatenate(self._buf)
+
+    # ---- lifecycle ----
+    def start(self):
+        import sounddevice as sd
+        if self._running:
+            return
+        if self._model is None:
+            self._load_model()
+
+        with self._lock:
+            self._buf = []
+        self._running = True
+
+        def callback(indata, frames, time_info, status):
+            with self._lock:
+                self._buf.append(indata[:, 0].copy())
+
+        self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                                      dtype="float32", callback=callback)
+        self._stream.start()
+        self._worker = threading.Thread(target=self._loop, daemon=True)
+        self._worker.start()
+
+    def _loop(self):
+        while self._running:
+            time.sleep(self.partial_every)
+            audio = self._current_audio()
+            if audio is None or len(audio) < SAMPLE_RATE * MIN_SECONDS:
+                continue
+            try:
+                text = normalize(self._transcribe(audio))
+                if text and self.on_partial:
+                    self.on_partial(text)
+            except Exception as e:
+                self._status(f"asr error: {e}")
+
+    def stop(self):
+        if not self._running:
+            return ""
+        self._running = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        if self._worker is not None:
+            self._worker.join(timeout=2)
+
+        audio = self._current_audio()
+        text = ""
+        if audio is not None and len(audio) >= SAMPLE_RATE * MIN_SECONDS:
+            text = normalize(self._transcribe(audio, final=True))
+        if self.on_final:
+            self.on_final(text)
+        return text

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TACET</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">●</span>
+        <div>
+          <h1>TACET</h1>
+          <p class="subtitle">Turn-Aware Completion Endpoint Tracker</p>
+        </div>
+      </div>
+      <div class="bridge" id="bridge">
+        <span class="dot" id="bridgeDot"></span>
+        <span id="bridgeText">connecting…</span>
+      </div>
+    </header>
+
+    <main class="stage">
+      <!-- mic control -->
+      <section class="mic-zone">
+        <button class="mic-btn" id="micBtn" aria-label="Record">
+          <svg viewBox="0 0 24 24" width="38" height="38" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <span class="spinner" id="micSpinner"></span>
+        </button>
+        <p class="mic-hint" id="micHint">Tap to start listening</p>
+      </section>
+
+      <!-- transcript -->
+      <section class="card transcript-card">
+        <div class="card-head">
+          <h2>Live transcript</h2>
+          <span class="pill" id="statePill">idle</span>
+        </div>
+        <p class="transcript" id="transcript"><span class="muted">Your speech will appear here…</span></p>
+      </section>
+
+      <!-- completion meter -->
+      <section class="card meter-card">
+        <div class="card-head">
+          <h2>Turn completion</h2>
+          <span class="prob" id="probText">—</span>
+        </div>
+        <div class="meter">
+          <div class="meter-fill" id="meterFill"></div>
+          <div class="meter-threshold" id="threshold" style="left:50%"></div>
+        </div>
+        <div class="meter-labels">
+          <span>keep listening</span>
+          <span class="badge" id="decisionBadge">—</span>
+          <span>respond</span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status">Ready</span>
+      <label class="switch-wrap">
+        <span>Save transcript CSV</span>
+        <span class="switch">
+          <input type="checkbox" id="saveLeak" checked />
+          <span class="slider"></span>
+        </span>
+      </label>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

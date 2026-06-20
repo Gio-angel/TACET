@@ -1,9 +1,5 @@
 # config.py
-# One place for every setting in the project: file paths, the size of the head,
-# the training knobs, and the decision threshold. Everything else imports from
-# here, so when we want to tweak something we change it once, here, and every
-# script picks it up. embeddings : .npz files into data/.
-# Where it fits: shared config, used by all the scripts.
+# shared variables and settings
 from pathlib import Path
 
 # --- paths ---
