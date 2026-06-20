@@ -11,8 +11,17 @@ import numpy as np
 from tacet.preprocess import normalize
 
 SAMPLE_RATE = 16000          # what Whisper expects
-PARTIAL_EVERY = 1.0          # seconds between partial transcriptions
+PARTIAL_EVERY = 0.45         # seconds between partial transcriptions
 MIN_SECONDS = 0.3            # ignore buffers shorter than this
+
+
+def _common_prefix(a, b):
+    out = []
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        out.append(x)
+    return out
 
 
 class LiveTranscriber:
@@ -23,12 +32,13 @@ class LiveTranscriber:
     on_status(text)   : human-readable status messages (model loading, errors)
     """
 
-    def __init__(self, on_partial=None, on_final=None, on_status=None,
+    def __init__(self, on_partial=None, on_final=None, on_status=None, on_display=None,
                  model_size="base", model_dir=None, device="cpu",
                  compute_type="int8", partial_every=PARTIAL_EVERY):
         self.on_partial = on_partial
         self.on_final = on_final
         self.on_status = on_status
+        self.on_display = on_display
         self.model_size = model_size
         self.model_dir = model_dir
         self.device = device
@@ -41,6 +51,12 @@ class LiveTranscriber:
         self._lock = threading.Lock()
         self._running = False
         self._worker = None
+        self._level = 0.0           # live mic loudness (RMS), for the UI orb
+        self._prev_hyp = []         # previous transcription (for LocalAgreement)
+        self._committed = []        # words confirmed stable across 2 runs
+
+    def level(self):
+        return self._level
 
     # ---- helpers ----
     def _status(self, msg):
@@ -60,7 +76,7 @@ class LiveTranscriber:
     def _transcribe(self, audio, final=False):
         segments, _ = self._model.transcribe(
             audio, language="en", beam_size=5 if final else 1,
-            vad_filter=True,
+            condition_on_previous_text=False,
         )
         return " ".join(seg.text for seg in segments).strip()
 
@@ -80,11 +96,15 @@ class LiveTranscriber:
 
         with self._lock:
             self._buf = []
+        self._prev_hyp = []
+        self._committed = []
         self._running = True
 
         def callback(indata, frames, time_info, status):
+            block = indata[:, 0]
             with self._lock:
-                self._buf.append(indata[:, 0].copy())
+                self._buf.append(block.copy())
+            self._level = float(np.sqrt(np.mean(block ** 2)))   # RMS loudness
 
         self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                       dtype="float32", callback=callback)
@@ -99,9 +119,19 @@ class LiveTranscriber:
             if audio is None or len(audio) < SAMPLE_RATE * MIN_SECONDS:
                 continue
             try:
-                text = normalize(self._transcribe(audio))
-                if text and self.on_partial:
-                    self.on_partial(text)
+                raw = normalize(self._transcribe(audio))
+                if raw and self.on_display:
+                    self.on_display(raw)                         # fast, flickery text for UI
+                words = raw.split()
+                agreed = _common_prefix(self._prev_hyp, words)   # words confirmed across 2 runs
+                trimmed = words[:-1]                             # all but the volatile last word
+                stable = agreed if len(agreed) >= len(trimmed) else trimmed
+                self._prev_hyp = words
+                if len(stable) > len(self._committed):
+                    self._committed = stable                     # commit faster, keep last word tentative
+                committed = " ".join(self._committed)
+                if committed and self.on_partial:
+                    self.on_partial(committed)                   # stable text for BERT
             except Exception as e:
                 self._status(f"asr error: {e}")
 

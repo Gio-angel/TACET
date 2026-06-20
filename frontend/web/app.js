@@ -1,131 +1,83 @@
-// app.js - TACET frontend
-// real microphone + Whisper.
-// The page POLLS Python (~5x/sec) for the latest transcript/status
+// TACET frontend — minimal voice UI. Page polls Python for state; orb reacts to mic level.
+const $ = (id) => document.getElementById(id);
+const els = { orb: $("orb"), transcript: $("transcript"), loader: $("loader"), hint: $("hint"), mic: $("micBtn"), llm: $("llm"), save: $("saveToggle"), text: $("textToggle"), dev: $("dev"), devCount: $("devCount") };
 
-const els = {
-  micBtn: document.getElementById("micBtn"),
-  micHint: document.getElementById("micHint"),
-  statePill: document.getElementById("statePill"),
-  transcript: document.getElementById("transcript"),
-  probText: document.getElementById("probText"),
-  meterFill: document.getElementById("meterFill"),
-  decisionBadge: document.getElementById("decisionBadge"),
-  bridgeDot: document.getElementById("bridgeDot"),
-  bridgeText: document.getElementById("bridgeText"),
-  status: document.getElementById("status"),
-  saveLeak: document.getElementById("saveLeak"),
-};
+let recording = false, saving = true, showText = false, lastEncode = 0;
+let targetLevel = 0, level = 0;
+let pollTimer = null, simTimer = null;
 
-const TAU = 0.5;
-let recording = false;
-let simTimer = null;
-let pollTimer = null;
+const hasBridge = () => window.pywebview && window.pywebview.api;
+async function callPy(m, ...a) { if (!hasBridge()) return null; try { return await window.pywebview.api[m](...a); } catch (e) { console.error(e); return null; } }
 
-// ---- Python bridge helpers ----
-function hasBridge() { return window.pywebview && window.pywebview.api; }
+function setBusy(b) { els.loader.style.display = b ? "block" : "none"; els.orb.style.display = b ? "none" : "block"; els.mic.classList.toggle("loading", b); }
+function setRecording(r) { recording = r; els.mic.classList.toggle("on", r); }
+function setHint(t) { els.hint.textContent = t; }
 
-async function callPy(method, ...args) {
-  if (!hasBridge()) return null;
-  try { return await window.pywebview.api[method](...args); }
-  catch (e) { console.error(e); return null; }
-}
-
-function setBridge(ok, text) {
-  els.bridgeDot.className = "dot " + (ok ? "ok" : "bad");
-  els.bridgeText.textContent = text;
-}
-
-// ---- UI updates ----
-function setProbability(p) {
-  if (p === null || p === undefined) { els.probText.textContent = "—"; els.meterFill.style.width = "0%"; return; }
-  const pct = Math.round(p * 100);
-  els.probText.textContent = pct + "%";
-  els.meterFill.style.width = pct + "%";
-  const respond = p >= TAU;
-  els.decisionBadge.textContent = respond ? "respond" : "listening";
-  els.decisionBadge.className = "badge " + (respond ? "respond" : "listen");
-}
-
-function setTranscript(text, live) {
-  els.transcript.innerHTML = text
-    ? text + (live ? ' <span class="cursor">▋</span>' : "")
-    : '<span class="muted">Your speech will appear here…</span>';
-}
-
-function showLoading(msg) {
-  els.transcript.innerHTML =
-    '<span class="loading-line"><span class="dot-spin"></span>' +
-    (msg || "working…") + "</span>";
-}
-
-function setRecordingVisual(on) {
-  recording = on;
-  els.micBtn.classList.toggle("recording", on);
-  els.micHint.textContent = on ? "Listening… tap to stop" : "Tap to start listening";
-  els.statePill.textContent = on ? "live" : "idle";
-  els.statePill.className = "pill " + (on ? "live" : "");
-}
-
-// ---- polling loop (bridge mode) ----
 async function poll() {
   const s = await callPy("poll");
   if (!s) return;
-  setRecordingVisual(s.recording);
-  els.micBtn.classList.toggle("loading", s.busy);
-  if (s.busy) {
-    showLoading(s.status || "working…");          // big, in the transcript area
-  } else {
-    setTranscript(s.transcript, s.recording && !s.final);
+  setBusy(s.busy);
+  setRecording(s.recording);
+  targetLevel = s.level || 0;
+  if (showText) renderTranscript(s.transcript || "", s.committed || "");
+  if (s.encode_count !== lastEncode) {
+    lastEncode = s.encode_count;
+    els.devCount.textContent = s.encode_count;
+    els.dev.title = "‖e‖=" + s.emb_norm + "  ·  " + (s.encoded_text || "");
+    els.dev.classList.add("flash");
+    setTimeout(() => els.dev.classList.remove("flash"), 250);
   }
-  els.status.textContent = s.error ? ("⚠ " + s.error) : s.status;
+  if (s.error) setHint("⚠ " + s.error);
+  else if (s.busy) setHint(s.status || "loading…");
+  else if (s.recording) setHint("listening…");
+  else setHint("Tap the mic to start");
 }
 
-// ---- mic button ----
-els.micBtn.addEventListener("click", async () => {
+// committed prefix solid, volatile tail faint -> far fewer visible mutations
+function renderTranscript(raw, committed) {
+  let tail = raw;
+  if (committed && raw.startsWith(committed)) tail = raw.slice(committed.length);
+  else committed = "";
+  els.transcript.innerHTML = committed + '<span class="tail">' + tail + "</span>";
+}
+
+function applyTextView() {
+  els.text.classList.toggle("on", showText);
+  els.orb.classList.toggle("faded", showText);
+  els.transcript.style.display = showText ? "block" : "none";
+}
+
+// smooth orb animation: scale + brightness driven by loudness, gentle idle breathing
+function animate() {
+  level += (targetLevel - level) * 0.2;
+  const idle = recording ? 0 : Math.sin(Date.now() / 900) * 0.02;
+  const scale = 1 + Math.min(level * 7, 0.6) + idle;
+  els.orb.style.transform = `scale(${scale.toFixed(3)})`;
+  els.orb.style.filter = `saturate(1.1) brightness(${1 + Math.min(level * 2, 0.5)})`;
+  requestAnimationFrame(animate);
+}
+
+els.mic.addEventListener("click", async () => {
   if (hasBridge()) {
-    const res = await callPy("toggle_record");
-    if (res) setRecordingVisual(res.recording);
+    const r = await callPy("toggle_record");
+    if (r) setRecording(r.recording);
   } else {
-    setRecordingVisual(!recording);
-    if (recording) startSim(); else stopSim();
+    setRecording(!recording);
+    if (recording) simTimer = setInterval(() => { targetLevel = Math.random() * 0.08; }, 150);
+    else { clearInterval(simTimer); targetLevel = 0; }
   }
 });
 
-// ---- placeholder simulation (browser preview only) ----
-const SAMPLE = "i would like to book a flight to athens next week".split(" ");
-function startSim() {
-  let i = 0;
-  setTranscript("", true);
-  els.status.textContent = "Browser preview — simulated (no microphone).";
-  simTimer = setInterval(() => {
-    if (i < SAMPLE.length) {
-      i++;
-      setTranscript(SAMPLE.slice(0, i).join(" "), true);
-      setProbability(Math.min(0.97, 0.05 + (i / SAMPLE.length) * 0.95));
-    } else { stopSim(); setRecordingVisual(false); }
-  }, 600);
-}
-function stopSim() { if (simTimer) { clearInterval(simTimer); simTimer = null; } }
+els.llm.addEventListener("change", () => callPy("set_llm", els.llm.value));
+els.save.addEventListener("click", () => { saving = !saving; els.save.classList.toggle("on", saving); callPy("set_save_leaks", saving); });
+els.text.addEventListener("click", () => { showText = !showText; applyTextView(); });
 
-// ---- save-leak toggle ----
-els.saveLeak.addEventListener("change", () => {
-  callPy("set_save_leaks", els.saveLeak.checked);
-  els.status.textContent = els.saveLeak.checked
-    ? "Saving transcripts to CSV." : "Not saving — test mode.";
-});
-
-// ---- startup ----
 function onReady() {
-  setProbability(null);
-  callPy("ping").then((r) => {
-    if (r) {
-      setBridge(true, "python: " + r);
-      callPy("set_save_leaks", els.saveLeak.checked);       // sync initial state
-      if (!pollTimer) pollTimer = setInterval(poll, 200);   // start polling
-    } else {
-      setBridge(false, "no bridge (browser preview)");
-    }
-  });
+  els.save.classList.toggle("on", saving);
+  callPy("set_save_leaks", saving);
+  callPy("set_llm", els.llm.value);
+  if (hasBridge() && !pollTimer) pollTimer = setInterval(poll, 150);
 }
 window.addEventListener("pywebviewready", onReady);
 window.addEventListener("load", () => { if (!hasBridge()) onReady(); });
+animate();

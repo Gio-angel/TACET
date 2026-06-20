@@ -7,15 +7,14 @@
 # Instead, those threads only update a small shared `state` dict, and the PAGE
 # polls Python for it (JS -> Python calls are safe). That's the whole trick here.
 #
-# Section 2: mic + Whisper, live transcript shown via polling, each finished turn
-# leaked to a CSV for hand-labeling. BERT + NN + full loop come later.
-#
 # Run:  python frontend/ui.py
 import csv
 import sys
 import threading
+import time
 from pathlib import Path
 
+import numpy as np
 import webview
 
 HERE = Path(__file__).resolve().parent
@@ -24,9 +23,11 @@ sys.path.insert(0, str(ROOT))                 # so `tacet` and `frontend` import
 
 INDEX = HERE / "web" / "index.html"
 WHISPER_DIR = ROOT / "models" / "whisper"     # used if present (offline/packaged)
+BERT_DIR = ROOT / "models" / "bert"
 LEAK_CSV = HERE / "leaks" / "transcripts.csv"
 
 from frontend.asr import LiveTranscriber       # noqa: E402
+from tacet.encoder import BertEncoder          # noqa: E402
 
 
 class Api:
@@ -36,10 +37,18 @@ class Api:
     def __init__(self):
         self.recording = False
         self.tr = None
+        self.encoder = BertEncoder(model_dir=BERT_DIR)
+        self.llm = "ChatGPT"                  # mock selection
         self.save_leaks = True               # toggled from the UI
         self._lock = threading.Lock()
-        self._state = {"status": "ready", "transcript": "", "final": False,
-                       "error": "", "busy": False}
+        self._state = {"status": "ready", "transcript": "", "committed": "",
+                       "final": False, "error": "", "busy": False,
+                       "encode_count": 0, "encoded_text": "", "emb_norm": 0.0}
+        self._committed = ""                  # latest committed transcript
+        self._last_change = 0.0               # when it last changed
+        self._last_encoded = ""               # last text we ran through BERT
+        self._encode_count = 0
+        self._enc_worker = None
 
     # ---- thread-safe state ----
     def _set(self, **kw):
@@ -54,10 +63,15 @@ class Api:
         self.save_leaks = bool(enabled)
         return self.save_leaks
 
+    def set_llm(self, name):
+        self.llm = name
+        return name
+
     def poll(self):
         with self._lock:
             snap = dict(self._state)
         snap["recording"] = self.recording
+        snap["level"] = self.tr.level() if (self.tr and self.recording) else 0.0
         return snap
 
     def toggle_record(self):
@@ -75,17 +89,52 @@ class Api:
     # ---- internals (background threads; only touch _state) ----
     def _start(self):
         self.tr = LiveTranscriber(
-            on_partial=lambda t: self._set(transcript=t, final=False),
+            on_partial=self._on_partial,
+            on_display=lambda t: self._set(transcript=t, final=False),
             on_final=self._on_final,
             on_status=lambda t: self._set(status=t),
             model_dir=WHISPER_DIR,
         )
         try:
             self.tr.start()
+            self.encoder.ensure_loaded(status=lambda t: self._set(status=t))
+            self._committed = ""
+            self._last_encoded = ""
+            self._last_change = time.monotonic()
             self._set(busy=False, status="listening…")
+            self._enc_worker = threading.Thread(target=self._encode_loop, daemon=True)
+            self._enc_worker.start()
         except Exception as e:
             self.recording = False
-            self._set(busy=False, status="error", error=f"could not start mic: {e}")
+            self._set(busy=False, status="error", error=f"start error: {e}")
+
+    def _on_partial(self, text):
+        # committed text drives BERT timing + the "solid" part of the displayed text
+        with self._lock:
+            if text != self._committed:
+                self._committed = text
+                self._last_change = time.monotonic()
+            self._state["committed"] = text
+
+    def _encode_loop(self):
+        # encode the latest committed text as soon as it changes; coalesces so it never backs up
+        while self.recording:
+            time.sleep(0.1)
+            with self._lock:
+                committed = self._committed
+            if committed and committed != self._last_encoded:
+                self._encode(committed)
+
+    def _encode(self, text):
+        try:
+            emb = self.encoder.encode(text)
+        except Exception as e:
+            self._set(error=f"bert error: {e}")
+            return
+        self._last_encoded = text
+        self._encode_count += 1
+        self._set(encode_count=self._encode_count, encoded_text=text,
+                  emb_norm=round(float(np.linalg.norm(emb)), 2))
 
     def _stop(self):
         try:
@@ -97,6 +146,8 @@ class Api:
 
     def _on_final(self, text):
         self._set(transcript=text, final=True, status="turn complete")
+        if text:
+            self._encode(text)               # one final encode on the full turn
         self._leak(text)
 
     def _leak(self, text):
