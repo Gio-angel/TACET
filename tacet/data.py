@@ -16,3 +16,8 @@ def load_npz(path):
     assert X.ndim == 2 and X.shape[1] == 768, f"bad embedding shape {tuple(X.shape)}"
     assert X.shape[0] == y.shape[0], "embeddings/labels length mismatch"
     return X, y
+
+
+def load(path):
+    return load_npz(path)
+
