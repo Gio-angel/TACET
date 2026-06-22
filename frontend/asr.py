@@ -11,7 +11,7 @@ import numpy as np
 from tacet.preprocess import normalize
 
 SAMPLE_RATE = 16000          # what Whisper expects
-PARTIAL_EVERY = 0.45         # seconds between partial transcriptions
+PARTIAL_EVERY = 0.35         # seconds between partial transcriptions
 MIN_SECONDS = 0.3            # ignore buffers shorter than this
 
 
@@ -33,7 +33,7 @@ class LiveTranscriber:
     """
 
     def __init__(self, on_partial=None, on_final=None, on_status=None, on_display=None,
-                 model_size="base", model_dir=None, device="cpu",
+                 model_size="base.en", model_dir=None, device="cpu",
                  compute_type="int8", partial_every=PARTIAL_EVERY):
         self.on_partial = on_partial
         self.on_final = on_final
@@ -57,6 +57,14 @@ class LiveTranscriber:
 
     def level(self):
         return self._level
+
+    def reset(self):
+        # clear audio + committed text so the next turn starts from zero
+        with self._lock:
+            self._buf = []
+        self._prev_hyp = []
+        self._committed = []
+        self._level = 0.0
 
     # ---- helpers ----
     def _status(self, msg):

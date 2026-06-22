@@ -1,8 +1,9 @@
 // TACET frontend — minimal voice UI. Page polls Python for state; orb reacts to mic level.
 const $ = (id) => document.getElementById(id);
-const els = { orb: $("orb"), transcript: $("transcript"), loader: $("loader"), hint: $("hint"), mic: $("micBtn"), llm: $("llm"), save: $("saveToggle"), text: $("textToggle"), dev: $("dev"), devCount: $("devCount") };
+const els = { orb: $("orb"), transcript: $("transcript"), loader: $("loader"), hint: $("hint"), mic: $("micBtn"), llm: $("llm"), save: $("saveToggle"), text: $("textToggle"), dev: $("dev"), devCount: $("devCount"), devProb: $("devProb") };
 
 let recording = false, saving = true, showText = false, lastEncode = 0;
+let talking = false, talkMix = 0;
 let targetLevel = 0, level = 0;
 let pollTimer = null, simTimer = null;
 
@@ -18,16 +19,19 @@ async function poll() {
   if (!s) return;
   setBusy(s.busy);
   setRecording(s.recording);
-  targetLevel = s.level || 0;
+  talking = s.talking;
+  targetLevel = talking ? 0 : (s.level || 0);   // ignore mic while the model talks
+  els.devProb.textContent = (s.prob ?? 0).toFixed(2);
   if (showText) renderTranscript(s.transcript || "", s.committed || "");
   if (s.encode_count !== lastEncode) {
     lastEncode = s.encode_count;
     els.devCount.textContent = s.encode_count;
-    els.dev.title = "‖e‖=" + s.emb_norm + "  ·  " + (s.encoded_text || "");
+    els.dev.title = "P=" + s.prob + "  ·  " + (s.encoded_text || "");
     els.dev.classList.add("flash");
     setTimeout(() => els.dev.classList.remove("flash"), 250);
   }
   if (s.error) setHint("⚠ " + s.error);
+  else if (s.talking) setHint("talking…");
   else if (s.busy) setHint(s.status || "loading…");
   else if (s.recording) setHint("listening…");
   else setHint("Tap the mic to start");
@@ -50,10 +54,12 @@ function applyTextView() {
 // smooth orb animation: scale + brightness driven by loudness, gentle idle breathing
 function animate() {
   level += (targetLevel - level) * 0.2;
-  const idle = recording ? 0 : Math.sin(Date.now() / 900) * 0.02;
+  talkMix += ((talking ? 1 : 0) - talkMix) * 0.08;   // smooth blue<->orange fade
+  const idle = (recording && !talking) ? 0 : Math.sin(Date.now() / 900) * 0.02;
   const scale = 1 + Math.min(level * 7, 0.6) + idle;
   els.orb.style.transform = `scale(${scale.toFixed(3)})`;
-  els.orb.style.filter = `saturate(1.1) brightness(${1 + Math.min(level * 2, 0.5)})`;
+  els.orb.style.filter =
+    `saturate(1.1) brightness(${1 + Math.min(level * 2, 0.5)}) hue-rotate(${(talkMix * 185).toFixed(0)}deg)`;
   requestAnimationFrame(animate);
 }
 

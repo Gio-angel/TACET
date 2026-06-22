@@ -28,6 +28,11 @@ LEAK_CSV = HERE / "leaks" / "transcripts.csv"
 
 from frontend.asr import LiveTranscriber       # noqa: E402
 from tacet.encoder import BertEncoder          # noqa: E402
+from tacet.infer import TacetEndpointer        # noqa: E402
+from tacet.gate import should_respond          # noqa: E402
+
+TALK_SECONDS = 4                               # mock duration the model "talks"
+SILENCE_HOLD = 0.5                             # decide only after text is stable this long
 
 
 class Api:
@@ -38,14 +43,19 @@ class Api:
         self.recording = False
         self.tr = None
         self.encoder = BertEncoder(model_dir=BERT_DIR)
+        self.endpointer = None               # loaded lazily on first record
         self.llm = "ChatGPT"                  # mock selection
         self.save_leaks = True               # toggled from the UI
+        self._talking = False
+        self._last_prob = 0.0
         self._lock = threading.Lock()
         self._state = {"status": "ready", "transcript": "", "committed": "",
-                       "final": False, "error": "", "busy": False,
-                       "encode_count": 0, "encoded_text": "", "emb_norm": 0.0}
-        self._committed = ""                  # latest committed transcript
-        self._last_change = 0.0               # when it last changed
+                       "final": False, "error": "", "busy": False, "talking": False,
+                       "encode_count": 0, "encoded_text": "", "prob": 0.0}
+        self._committed = ""                  # committed prefix (for the text view only)
+        self._raw = ""                        # latest raw transcript (drives the decision)
+        self._raw_change = 0.0                # when raw last changed
+        self._last_change = 0.0
         self._last_encoded = ""               # last text we ran through BERT
         self._encode_count = 0
         self._enc_worker = None
@@ -90,7 +100,7 @@ class Api:
     def _start(self):
         self.tr = LiveTranscriber(
             on_partial=self._on_partial,
-            on_display=lambda t: self._set(transcript=t, final=False),
+            on_display=self._on_display,
             on_final=self._on_final,
             on_status=lambda t: self._set(status=t),
             model_dir=WHISPER_DIR,
@@ -98,6 +108,9 @@ class Api:
         try:
             self.tr.start()
             self.encoder.ensure_loaded(status=lambda t: self._set(status=t))
+            if self.endpointer is None:
+                self._set(status="loading head…")
+                self.endpointer = TacetEndpointer()      # wire the NN (loads once)
             self._committed = ""
             self._last_encoded = ""
             self._last_change = time.monotonic()
@@ -108,8 +121,18 @@ class Api:
             self.recording = False
             self._set(busy=False, status="error", error=f"start error: {e}")
 
+    def _on_display(self, text):
+        if self._talking:
+            return
+        with self._lock:
+            if text != self._raw:
+                self._raw = text
+                self._raw_change = time.monotonic()
+            self._state.update(transcript=text, final=False)
+
     def _on_partial(self, text):
-        # committed text drives BERT timing + the "solid" part of the displayed text
+        if self._talking:
+            return
         with self._lock:
             if text != self._committed:
                 self._committed = text
@@ -117,13 +140,17 @@ class Api:
             self._state["committed"] = text
 
     def _encode_loop(self):
-        # encode the latest committed text as soon as it changes; coalesces so it never backs up
         while self.recording:
             time.sleep(0.1)
+            if self._talking:
+                continue
             with self._lock:
-                committed = self._committed
-            if committed and committed != self._last_encoded:
-                self._encode(committed)
+                raw, changed = self._raw, self._raw_change
+            if raw and raw != self._last_encoded:
+                self._encode(raw)                             # score the latest words
+            elif raw and (time.monotonic() - changed) >= SILENCE_HOLD:
+                if should_respond(self._last_prob):           # decide at the pause
+                    threading.Thread(target=self._take_turn, daemon=True).start()
 
     def _encode(self, text):
         try:
@@ -133,8 +160,29 @@ class Api:
             return
         self._last_encoded = text
         self._encode_count += 1
+        self._last_prob = self.endpointer.probability(emb)    # wire inference (no decision yet)
         self._set(encode_count=self._encode_count, encoded_text=text,
-                  emb_norm=round(float(np.linalg.norm(emb)), 2))
+                  prob=round(self._last_prob, 3))
+
+    def _take_turn(self):
+        # model takes its turn: fade orange, reset the user's sentence, mock-talk, fade back
+        if self._talking:
+            return
+        self._talking = True
+        self._set(talking=True, status="talking…", transcript="", committed="")
+        self._reset_turn()
+        time.sleep(TALK_SECONDS)
+        self._reset_turn()                                # drop anything captured while talking
+        self._talking = False
+        self._set(talking=False, status="listening…", transcript="", committed="")
+
+    def _reset_turn(self):
+        if self.tr:
+            self.tr.reset()
+        with self._lock:
+            self._committed = ""
+            self._raw = ""
+        self._last_encoded = ""
 
     def _stop(self):
         try:

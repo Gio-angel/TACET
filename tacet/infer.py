@@ -1,41 +1,27 @@
 # infer.py
-# Wraps the trained head so the rest of the system can ask one simple question:
-# "is the user done talking?" You give it an embedding, it gives back the
-# probability (from the head) and the yes/no decision (from the gate). It knows
-# nothing about audio or BERT on purpose, so we can use and test it without that
-# heavy stack installed.
-# Where it fits: the inference side of stage 4 + 5, used by app/demo.py.
+# inference: run the trained TACET head on a [CLS] embedding and return
+# P(complete). This module does the model forward pass ONLY and makes no decision.
+# The gate (tacet/gate.py) is a separate module that consumes this probability.
 import numpy as np
 
 import config as C
 from tacet.model import TACETHead
-from tacet.gate import should_respond
 
 
 class TacetEndpointer:
-    def __init__(self, head_path=None, tau: float = None):
+    """Loads the trained head once and turns embeddings into probabilities."""
+
+    def __init__(self, head_path=None):
         self.model = TACETHead.load(head_path or C.HEAD_PATH)
-        self.tau = C.TAU if tau is None else tau
 
     def probability(self, emb: np.ndarray) -> float:
         return float(self.model.score(emb)[0])
 
-    def take_turn(self, emb: np.ndarray) -> bool:
-        """True  -> user finished, respond.
-        False -> still mid-utterance, keep listening."""
-        return should_respond(self.probability(emb), self.tau)
-    
-    
-    
-def run_model_inference(embedding: np.ndarray) -> bool:
 
+def run_model_inference(embedding: np.ndarray) -> float:
+    """Validate the embedding and return P(complete). No gating here."""
     if embedding is None or embedding.size == 0:
         raise ValueError("Inference input embedding cannot be None or empty.")
-        
     if embedding.shape[-1] != C.EMB_DIM:
         raise ValueError(f"Embedding dimension mismatch. Expected {C.EMB_DIM}.")
-
-    # If it gets past the checks, it is guaranteed safe to calculate
-    endpointer = TacetEndpointer()
-    prob = endpointer.probability(embedding)
-    return should_respond(prob, C.TAU)
+    return TacetEndpointer().probability(embedding)
