@@ -13,6 +13,7 @@ from tacet.encoder import BertEncoder
 from tacet.gate import should_respond
 from tacet.infer import TacetEndpointer
 from testing.simulation.results import calculate_metrics, print_metrics
+from voice_mngt.pitch import PITCH_WINDOW_SECONDS, track_pitch
 from voice_mngt.spectrogram import spectrogram
 
 WHISPER_DIR = ROOT / "models" / "whisper"
@@ -34,6 +35,11 @@ class VoicePipelineRunner:
         self.last_encoded = ""
         self.last_prob = 0.0
         self.required_silence = 2000
+        self.last_pitch = None
+        self.pitch_pending = False
+        self.pitch_calls = 0
+        self.pitch_latency_ms = None
+        self.pitch_error = ""
         self.bert_calls = 0
         self.decision_made = False
         self.decision_reason = ""
@@ -89,6 +95,35 @@ class VoicePipelineRunner:
         print(f"\n[bert] P(complete)={self.last_prob:.3f} ({elapsed:.1f} ms)")
         return self.last_prob
 
+    def track_last_pitch(self):
+        audio = self.transcriber.audio_before_last_speech(PITCH_WINDOW_SECONDS)
+        started = time.monotonic()
+        self.pitch_calls += 1
+
+        try:
+            self.last_pitch = track_pitch(audio)
+            self.pitch_error = ""
+        except Exception as exc:
+            self.last_pitch = None
+            self.pitch_error = str(exc)
+
+        self.pitch_latency_ms = (time.monotonic() - started) * 1000
+        if self.pitch_error:
+            print(f"\n[pitch] error: {self.pitch_error}")
+        elif self.last_pitch is None:
+            print(f"\n[pitch] no voiced F0 detected ({self.pitch_latency_ms:.1f} ms)")
+        else:
+            contour = self.last_pitch["contour"]
+            print(
+                "\n[pitch] "
+                f"median={self.last_pitch['median']:.2f} Hz "
+                f"final={self.last_pitch['final']:.2f} Hz "
+                f"frames={len(contour)} ({self.pitch_latency_ms:.1f} ms)"
+            )
+            print("[pitch] contour: " + ", ".join(f"{value:.1f}" for value in contour))
+
+        return self.last_pitch
+
     def run(self):
         self.load_models()
         self.turn_started_at = time.monotonic()
@@ -106,6 +141,7 @@ class VoicePipelineRunner:
 
                 if spectrogram(audio_level):
                     self.last_voice_at = now
+                    self.pitch_pending = True
 
                 with self.lock:
                     raw = self.raw_text
@@ -117,6 +153,11 @@ class VoicePipelineRunner:
 
                 silence_duration = now - self.last_voice_at
                 if not raw:
+                    continue
+
+                if self.pitch_pending:
+                    self.pitch_pending = False
+                    self.track_last_pitch()
                     continue
 
                 bert_gate = should_respond(
@@ -141,6 +182,9 @@ class VoicePipelineRunner:
         except KeyboardInterrupt:
             print("\n[status] stopped by user")
             self.decision_reason = "manual_stop"
+            if self.pitch_pending:
+                self.pitch_pending = False
+                self.track_last_pitch()
             self.log_row(time.monotonic(), self.raw_text, 0.0)
         finally:
             final_text = self.transcriber.stop()
@@ -163,6 +207,14 @@ class VoicePipelineRunner:
                 "transcript": transcript,
                 "bert_prob": f"{self.last_prob:.6f}",
                 "bert_calls": str(self.bert_calls),
+                "pitch_median_hz": self._pitch_value("median"),
+                "pitch_final_hz": self._pitch_value("final"),
+                "pitch_frames": str(len(self.last_pitch["contour"])) if self.last_pitch else "0",
+                "pitch_calls": str(self.pitch_calls),
+                "pitch_latency_ms": (
+                    f"{self.pitch_latency_ms:.3f}" if self.pitch_latency_ms is not None else ""
+                ),
+                "pitch_error": self.pitch_error,
                 "turn_start_time": str(self.turn_started_at),
                 "decision_time": str(decision_time),
                 "decision_offset": str(decision_time - self.turn_started_at),
@@ -170,6 +222,11 @@ class VoicePipelineRunner:
                 "gt_user_done_offset": "",
             }
         )
+
+    def _pitch_value(self, key):
+        if self.last_pitch is None:
+            return ""
+        return f"{self.last_pitch[key]:.6f}"
 
     def print_report(self):
         print("\n")
@@ -179,6 +236,17 @@ class VoicePipelineRunner:
         print(f"Final transcript: {self.raw_text}")
         print(f"BERT calls:       {self.bert_calls}")
         print(f"Last probability: {self.last_prob:.3f}")
+        print(f"YIN calls:        {self.pitch_calls}")
+        if self.last_pitch:
+            print(f"Median pitch:     {self.last_pitch['median']:.2f} Hz")
+            print(f"Final pitch:      {self.last_pitch['final']:.2f} Hz")
+            print(f"Pitch frames:     {len(self.last_pitch['contour'])}")
+        else:
+            print("Pitch result:     unavailable")
+        if self.pitch_latency_ms is not None:
+            print(f"YIN latency:      {self.pitch_latency_ms:.1f} ms")
+        if self.pitch_error:
+            print(f"Pitch error:      {self.pitch_error}")
         print(f"Decision reason:  {self.decision_reason or 'none'}")
 
 

@@ -31,6 +31,7 @@ from frontend.asr import LiveTranscriber       # noqa: E402
 from tacet.encoder import BertEncoder          # noqa: E402
 from tacet.infer import TacetEndpointer        # noqa: E402
 from tacet.gate import should_respond          # noqa: E402
+from voice_mngt.pitch import PITCH_WINDOW_SECONDS, track_pitch  # noqa: E402
 from voice_mngt.spectrogram import spectrogram # noqa: E402
 
 TALK_SECONDS = 4                               # mock duration the model "talks"
@@ -54,10 +55,14 @@ class Api:
         self.save_leaks = True               # toggled from the UI
         self._talking = False
         self._last_prob = 0.0
+        self._last_pitch = None
+        self._pitch_pending = False
         self._lock = threading.Lock()
         self._state = {"status": "ready", "transcript": "", "committed": "",
                        "final": False, "error": "", "busy": False, "talking": False,
-                       "encode_count": 0, "encoded_text": "", "prob": 0.0}
+                       "encode_count": 0, "encoded_text": "", "prob": 0.0,
+                       "pitch_hz": None, "final_pitch_hz": None,
+                       "pitch_contour": []}
         self._committed = ""                  # committed prefix (for the text view only)
         self._raw = ""                        # latest raw transcript (drives the decision)
         self._raw_change = 0.0                # when raw last changed
@@ -179,6 +184,7 @@ class Api:
             audio_level = self.tr.level() if self.tr else 0.0
             if spectrogram(audio_level):
                 self._last_voice_time = now
+                self._pitch_pending = True
             with self._lock:
                 raw = self._raw
             if raw and raw != self._last_encoded:
@@ -186,6 +192,10 @@ class Api:
                 if prob is not None:
                     required_silence = 400 if prob > C.TAU else 2000
             elif raw:
+                if self._pitch_pending:
+                    self._pitch_pending = False
+                    self._track_pitch()
+                    continue
                 silence_duration = now - self._last_voice_time
                 if should_respond(
                     self._last_prob,
@@ -208,6 +218,25 @@ class Api:
                   prob=round(self._last_prob, 3))
         return self._last_prob
 
+    def _track_pitch(self):
+        try:
+            audio = self.tr.audio_before_last_speech(PITCH_WINDOW_SECONDS)
+            self._last_pitch = track_pitch(audio)
+        except Exception as e:
+            self._set(error=f"pitch error: {e}")
+            return None
+
+        if self._last_pitch is None:
+            self._set(pitch_hz=None, final_pitch_hz=None, pitch_contour=[])
+            return None
+
+        self._set(
+            pitch_hz=round(self._last_pitch["median"], 2),
+            final_pitch_hz=round(self._last_pitch["final"], 2),
+            pitch_contour=[round(value, 2) for value in self._last_pitch["contour"]],
+        )
+        return self._last_pitch
+
     def _take_turn(self):
         # model takes its turn: fade orange, reset the user's sentence, mock-talk, fade back
         if self._talking:
@@ -227,7 +256,10 @@ class Api:
             self._committed = ""
             self._raw = ""
         self._last_encoded = ""
+        self._last_pitch = None
+        self._pitch_pending = False
         self._last_voice_time = time.monotonic()
+        self._set(pitch_hz=None, final_pitch_hz=None, pitch_contour=[])
 
     def _stop(self):
         try:

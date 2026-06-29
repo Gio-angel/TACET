@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+import config as C
 from tacet.preprocess import normalize
 
 SAMPLE_RATE = 16000          # what Whisper expects
@@ -52,6 +53,8 @@ class LiveTranscriber:
         self._running = False
         self._worker = None
         self._level = 0.0           # live mic loudness (RMS), for the UI orb
+        self._sample_count = 0
+        self._last_voice_sample = 0
         self._prev_hyp = []         # previous transcription (for LocalAgreement)
         self._committed = []        # words confirmed stable across 2 runs
 
@@ -62,6 +65,8 @@ class LiveTranscriber:
         # clear audio + committed text so the next turn starts from zero
         with self._lock:
             self._buf = []
+            self._sample_count = 0
+            self._last_voice_sample = 0
         self._prev_hyp = []
         self._committed = []
         self._level = 0.0
@@ -94,6 +99,21 @@ class LiveTranscriber:
                 return None
             return np.concatenate(self._buf)
 
+    def audio_before_last_speech(self, seconds=0.3):
+        """Copy the audio window ending at the latest voiced mic block."""
+
+        sample_count = int(SAMPLE_RATE * seconds)
+        if sample_count <= 0:
+            return None
+
+        with self._lock:
+            if not self._buf or self._last_voice_sample == 0:
+                return None
+            audio = np.concatenate(self._buf)
+            end = min(self._last_voice_sample, len(audio))
+            start = max(0, end - sample_count)
+            return audio[start:end].copy()
+
     # ---- lifecycle ----
     def start(self):
         import sounddevice as sd
@@ -104,15 +124,21 @@ class LiveTranscriber:
 
         with self._lock:
             self._buf = []
+            self._sample_count = 0
+            self._last_voice_sample = 0
         self._prev_hyp = []
         self._committed = []
         self._running = True
 
         def callback(indata, frames, time_info, status):
-            block = indata[:, 0]
+            block = indata[:, 0].copy()
+            level = float(np.sqrt(np.mean(block ** 2)))
             with self._lock:
-                self._buf.append(block.copy())
-            self._level = float(np.sqrt(np.mean(block ** 2)))   # RMS loudness
+                self._buf.append(block)
+                self._sample_count += len(block)
+                if level > C.SPEC_THRESHOLD:
+                    self._last_voice_sample = self._sample_count
+            self._level = level
 
         self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                       dtype="float32", callback=callback)
