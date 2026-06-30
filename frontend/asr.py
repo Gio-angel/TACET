@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+import config as C
 from tacet.preprocess import normalize
 
 SAMPLE_RATE = 16000          # what Whisper expects
@@ -52,6 +53,9 @@ class LiveTranscriber:
         self._running = False
         self._worker = None
         self._level = 0.0           # live mic loudness (RMS), for the UI orb
+        self._sample_count = 0
+        self._last_voice_sample = 0
+        self._last_voice_at = 0.0
         self._prev_hyp = []         # previous transcription (for LocalAgreement)
         self._committed = []        # words confirmed stable across 2 runs
 
@@ -62,6 +66,9 @@ class LiveTranscriber:
         # clear audio + committed text so the next turn starts from zero
         with self._lock:
             self._buf = []
+            self._sample_count = 0
+            self._last_voice_sample = 0
+            self._last_voice_at = 0.0
         self._prev_hyp = []
         self._committed = []
         self._level = 0.0
@@ -76,7 +83,7 @@ class LiveTranscriber:
         src = self.model_size
         if self.model_dir and Path(self.model_dir).exists():
             src = str(self.model_dir)            # packaged / offline path
-        self._status(f"loading whisper ({src})…")
+        self._status(f"loading whisper ({src})...")
         self._model = WhisperModel(src, device=self.device,
                                    compute_type=self.compute_type)
         self._status("model ready")
@@ -94,6 +101,48 @@ class LiveTranscriber:
                 return None
             return np.concatenate(self._buf)
 
+    def audio_before_last_speech(self, seconds=0.3):
+        """Copy the audio window ending at the latest voiced mic block."""
+
+        item = self.audio_window_before_last_speech(seconds)
+        return item[0] if item is not None else None
+
+    def audio_window_before_last_speech(self, seconds=0.3):
+        """Return a recent voiced window and its end-sample freshness token."""
+
+        sample_count = int(SAMPLE_RATE * seconds)
+        if sample_count <= 0:
+            return None
+
+        with self._lock:
+            if not self._buf or self._last_voice_sample == 0:
+                return None
+            end = min(self._last_voice_sample, self._sample_count)
+            start = max(0, end - sample_count)
+            pieces = []
+            cursor = self._sample_count
+            for block in reversed(self._buf):
+                block_start = cursor - len(block)
+                overlap_start = max(start, block_start)
+                overlap_end = min(end, cursor)
+                if overlap_start < overlap_end:
+                    pieces.append(block[overlap_start - block_start:overlap_end - block_start])
+                if block_start <= start:
+                    break
+                cursor = block_start
+            if not pieces:
+                return None
+            audio = np.concatenate(list(reversed(pieces))).copy()
+            return audio, end
+
+    def last_voice_sample(self):
+        with self._lock:
+            return self._last_voice_sample
+
+    def last_voice_time(self):
+        with self._lock:
+            return self._last_voice_at
+
     # ---- lifecycle ----
     def start(self):
         import sounddevice as sd
@@ -104,15 +153,23 @@ class LiveTranscriber:
 
         with self._lock:
             self._buf = []
+            self._sample_count = 0
+            self._last_voice_sample = 0
+            self._last_voice_at = 0.0
         self._prev_hyp = []
         self._committed = []
         self._running = True
 
         def callback(indata, frames, time_info, status):
-            block = indata[:, 0]
+            block = indata[:, 0].copy()
+            level = float(np.sqrt(np.mean(block ** 2)))
             with self._lock:
-                self._buf.append(block.copy())
-            self._level = float(np.sqrt(np.mean(block ** 2)))   # RMS loudness
+                self._buf.append(block)
+                self._sample_count += len(block)
+                if level > C.SPEC_THRESHOLD:
+                    self._last_voice_sample = self._sample_count
+                    self._last_voice_at = time.monotonic()
+            self._level = level
 
         self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                       dtype="float32", callback=callback)

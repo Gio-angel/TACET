@@ -15,3 +15,6 @@ transformers
 
 # --- packaging  ---
 # pyinstaller
+
+#pitching 
+librosa

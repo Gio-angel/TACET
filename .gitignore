@@ -1,26 +1,43 @@
 # --- Python ---
 __pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
+*.pyc
+.pytest_cache/
 
-# --- Virtual environments ---
-.venv/
+# 1. Virtual Environment (Root-level folders)
+Include/
+Lib/
+scripts/
+share/
+pyvenv.cfg
+
+#Data
+data/
+
+# 2. Virtual Environment (Standard folders just in case)
 venv/
+.venv/
 env/
-.python-version
+.env/
 
-
-data/*.npz
-leaks
-
-artifacts/*.pt
-*.ckpt
+# 3. ML Models, Datasets & Artifacts (UPDATED)
+models/bert/
+artifacts/
+frontend/leaks/
 *.pt
+*.bin
+*.safetensors
+*.h5
+*.onnx
+*.msgpack
+*.csv
 
+# 4. Custom Project Tooling
+.agents/
+.codex/
 
+# 6. Jupyter Notebook Checkpoints
+.ipynb_checkpoints
 
-# --- Editors / IDE ---
-.vscode/
+# 7. Environment Variables / Secrets
+.env
+.env.local
