@@ -18,6 +18,8 @@ def should_respond(
     min_threshold: float = None,
     max_threshold: float = None,
     required_silence: float = None,
+    pitch_falling: bool = False,
+    pitch_fresh: bool = False,
 ) -> bool:
     if tau is None:
         tau = C.TAU
@@ -34,6 +36,11 @@ def should_respond(
 
     if required_silence is not None:
         required_silence = _threshold_seconds(required_silence)
+        if pitch_falling and pitch_fresh and prob >= tau:
+            required_silence = min(
+                required_silence,
+                _threshold_seconds(C.PITCH_REQUIRED_SILENCE),
+            )
         return silence_duration > required_silence
 
     min_threshold = _threshold_seconds(min_threshold)

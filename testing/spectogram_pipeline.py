@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +10,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import config as C
+from frontend.asr import LiveTranscriber
 from tacet.gate import should_respond
+import voice_mngt.pitch as pitch_module
 from voice_mngt.spectrogram import spectrogram
 
 try:
@@ -131,6 +135,92 @@ def test_required_silence_pipeline():
         assert decision is expected
 
 
+def test_pitch_shortens_silence_only_when_safe():
+    print("\n" + "=" * 60)
+    print("FRESH FALLING-PITCH GATE VERIFICATION")
+    print("=" * 60)
+
+    cases = [
+        ("fresh falling pitch", C.TAU + 0.1, 0.201, 0.0, True, True, True),
+        ("stale falling pitch", C.TAU + 0.1, 0.201, 0.0, True, False, False),
+        ("incomplete text", C.TAU - 0.1, 0.201, 0.0, True, True, False),
+        (
+            "active speech veto",
+            C.TAU + 0.1,
+            0.500,
+            C.SPEC_THRESHOLD + 0.01,
+            True,
+            True,
+            False,
+        ),
+    ]
+    for label, prob, silence, level, falling, fresh, expected in cases:
+        decision = should_respond(
+            prob,
+            audio_level=level,
+            silence_duration=silence,
+            required_silence=800,
+            pitch_falling=falling,
+            pitch_fresh=fresh,
+        )
+        print(f"{label}: {decision}")
+        assert decision is expected
+
+
+def test_pitch_audio_window_and_worker_freshness():
+    print("\n" + "=" * 60)
+    print("ROLLING PITCH WINDOW VERIFICATION")
+    print("=" * 60)
+
+    transcriber = LiveTranscriber()
+    transcriber._buf = [
+        np.arange(0, 4, dtype=np.float32),
+        np.arange(4, 8, dtype=np.float32),
+        np.arange(8, 12, dtype=np.float32),
+    ]
+    transcriber._sample_count = 12
+    transcriber._last_voice_sample = 9
+    audio, token = transcriber.audio_window_before_last_speech(6 / 16000)
+    assert token == 9
+    assert audio.tolist() == [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+
+    original_track_pitch = pitch_module.track_pitch
+    completed = threading.Event()
+
+    def fake_track_pitch(_audio):
+        completed.set()
+        return {
+            "contour": [180.0, 150.0],
+            "median": 165.0,
+            "final": 150.0,
+            "drop_ratio": 0.15,
+            "falling": True,
+        }
+
+    pitch_module.track_pitch = fake_track_pitch
+    tracker = pitch_module.RollingPitchTracker(
+        lambda: (np.ones(3200, dtype=np.float32), 9),
+        update_seconds=0.001,
+    )
+    try:
+        tracker.start(warm_up=False)
+        assert completed.wait(1.0)
+        deadline = time.monotonic() + 1.0
+        fresh = tracker.snapshot(current_token=9)
+        while fresh is None and time.monotonic() < deadline:
+            time.sleep(0.001)
+            fresh = tracker.snapshot(current_token=9)
+        stale = tracker.snapshot(current_token=10)
+        assert fresh and fresh["fresh"] and fresh["falling"]
+        assert stale and not stale["fresh"]
+    finally:
+        tracker.stop()
+        pitch_module.track_pitch = original_track_pitch
+
+    print("exact voiced window: True")
+    print("newer-speech invalidation: True")
+
+
 def test_inference_still_connects_to_gate():
     print("\n" + "=" * 60)
     print("MOCK BERT EMBEDDING -> INFERENCE -> GATE VERIFICATION")
@@ -161,6 +251,8 @@ def main():
     test_spectrogram_threshold()
     test_gate_timing_pipeline()
     test_required_silence_pipeline()
+    test_pitch_shortens_silence_only_when_safe()
+    test_pitch_audio_window_and_worker_freshness()
     test_inference_still_connects_to_gate()
     print("\nAll spectogram pipeline checks passed.")
 

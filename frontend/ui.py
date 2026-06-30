@@ -31,7 +31,7 @@ from frontend.asr import LiveTranscriber       # noqa: E402
 from tacet.encoder import BertEncoder          # noqa: E402
 from tacet.infer import TacetEndpointer        # noqa: E402
 from tacet.gate import should_respond          # noqa: E402
-from voice_mngt.pitch import PITCH_WINDOW_SECONDS, track_pitch  # noqa: E402
+from voice_mngt.pitch import PITCH_WINDOW_SECONDS, RollingPitchTracker  # noqa: E402
 from voice_mngt.spectrogram import spectrogram # noqa: E402
 
 TALK_SECONDS = 4                               # mock duration the model "talks"
@@ -56,12 +56,14 @@ class Api:
         self._talking = False
         self._last_prob = 0.0
         self._last_pitch = None
-        self._pitch_pending = False
+        self._pitch_tracker = None
+        self._pitch_sample = None
         self._lock = threading.Lock()
         self._state = {"status": "ready", "transcript": "", "committed": "",
                        "final": False, "error": "", "busy": False, "talking": False,
                        "encode_count": 0, "encoded_text": "", "prob": 0.0,
                        "pitch_hz": None, "final_pitch_hz": None,
+                       "pitch_drop_ratio": None, "pitch_falling": False,
                        "pitch_contour": []}
         self._committed = ""                  # committed prefix (for the text view only)
         self._raw = ""                        # latest raw transcript (drives the decision)
@@ -99,6 +101,8 @@ class Api:
                 self.tr.on_final = None
                 self.tr.on_status = None
                 self.tr.stop()
+            if self._pitch_tracker:
+                self._pitch_tracker.stop()
         except Exception:
             pass
         return True
@@ -134,13 +138,21 @@ class Api:
         try:
             if not self.recording:
                 return
+            self._set(status="warming pitch tracker...")
+            self._pitch_tracker = RollingPitchTracker(
+                lambda: self.tr.audio_window_before_last_speech(PITCH_WINDOW_SECONDS),
+                token_source=self.tr.last_voice_sample,
+            )
+            self._pitch_tracker.start()
             self.tr.start()
             if not self.recording:
                 self.tr.stop()
+                self._pitch_tracker.stop()
                 return
             self.encoder.ensure_loaded(status=lambda t: self._set(status=t))
             if not self.recording:
                 self.tr.stop()
+                self._pitch_tracker.stop()
                 return
             if self.endpointer is None:
                 self._set(status="loading head...")
@@ -154,6 +166,8 @@ class Api:
             self._enc_worker.start()
         except Exception as e:
             self.recording = False
+            if self._pitch_tracker:
+                self._pitch_tracker.stop()
             self._set(busy=False, status="error", error=f"start error: {e}")
 
     def _on_display(self, text):
@@ -184,24 +198,25 @@ class Api:
             audio_level = self.tr.level() if self.tr else 0.0
             if spectrogram(audio_level):
                 self._last_voice_time = now
-                self._pitch_pending = True
+            callback_voice_at = self.tr.last_voice_time() if self.tr else 0.0
+            if callback_voice_at:
+                self._last_voice_time = max(self._last_voice_time, callback_voice_at)
+            pitch_state = self._refresh_pitch()
             with self._lock:
                 raw = self._raw
             if raw and raw != self._last_encoded:
                 prob = self._encode(raw)                      # score the latest words
                 if prob is not None:
-                    required_silence = 400 if prob > C.TAU else 2000
+                    required_silence = 800 if prob > C.TAU else 2000
             elif raw:
-                if self._pitch_pending:
-                    self._pitch_pending = False
-                    self._track_pitch()
-                    continue
                 silence_duration = now - self._last_voice_time
                 if should_respond(
                     self._last_prob,
                     audio_level=audio_level,
                     silence_duration=silence_duration,
                     required_silence=required_silence,
+                    pitch_falling=bool(pitch_state and pitch_state.get("falling")),
+                    pitch_fresh=bool(pitch_state and pitch_state.get("fresh")),
                 ):                                            # decide at the pause
                     threading.Thread(target=self._take_turn, daemon=True).start()
 
@@ -218,24 +233,33 @@ class Api:
                   prob=round(self._last_prob, 3))
         return self._last_prob
 
-    def _track_pitch(self):
-        try:
-            audio = self.tr.audio_before_last_speech(PITCH_WINDOW_SECONDS)
-            self._last_pitch = track_pitch(audio)
-        except Exception as e:
-            self._set(error=f"pitch error: {e}")
+    def _refresh_pitch(self):
+        if not self._pitch_tracker or not self.tr:
             return None
+        state = self._pitch_tracker.snapshot(self.tr.last_voice_sample())
+        if state is None:
+            return None
+        if state["voice_sample"] == self._pitch_sample:
+            return state
 
+        self._pitch_sample = state["voice_sample"]
+        if state.get("error"):
+            self._set(error=f"pitch error: {state['error']}")
+            return state
+        self._last_pitch = state if "contour" in state else None
         if self._last_pitch is None:
-            self._set(pitch_hz=None, final_pitch_hz=None, pitch_contour=[])
-            return None
+            self._set(pitch_hz=None, final_pitch_hz=None, pitch_drop_ratio=None,
+                      pitch_falling=False, pitch_contour=[])
+            return state
 
         self._set(
             pitch_hz=round(self._last_pitch["median"], 2),
             final_pitch_hz=round(self._last_pitch["final"], 2),
+            pitch_drop_ratio=round(self._last_pitch["drop_ratio"], 3),
+            pitch_falling=self._last_pitch["falling"],
             pitch_contour=[round(value, 2) for value in self._last_pitch["contour"]],
         )
-        return self._last_pitch
+        return state
 
     def _take_turn(self):
         # model takes its turn: fade orange, reset the user's sentence, mock-talk, fade back
@@ -257,14 +281,19 @@ class Api:
             self._raw = ""
         self._last_encoded = ""
         self._last_pitch = None
-        self._pitch_pending = False
+        self._pitch_sample = None
+        if self._pitch_tracker:
+            self._pitch_tracker.reset()
         self._last_voice_time = time.monotonic()
-        self._set(pitch_hz=None, final_pitch_hz=None, pitch_contour=[])
+        self._set(pitch_hz=None, final_pitch_hz=None, pitch_drop_ratio=None,
+                  pitch_falling=False, pitch_contour=[])
 
     def _stop(self):
         try:
             if self.tr:
                 self.tr.stop()
+            if self._pitch_tracker:
+                self._pitch_tracker.stop()
         except Exception as e:
             self._set(error=f"stop error: {e}")
         self._set(busy=False)

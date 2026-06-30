@@ -13,7 +13,7 @@ from tacet.encoder import BertEncoder
 from tacet.gate import should_respond
 from tacet.infer import TacetEndpointer
 from testing.simulation.results import calculate_metrics, print_metrics
-from voice_mngt.pitch import PITCH_WINDOW_SECONDS, track_pitch
+from voice_mngt.pitch import PITCH_WINDOW_SECONDS, RollingPitchTracker
 from voice_mngt.spectrogram import spectrogram
 
 WHISPER_DIR = ROOT / "models" / "whisper"
@@ -36,10 +36,10 @@ class VoicePipelineRunner:
         self.last_prob = 0.0
         self.required_silence = 2000
         self.last_pitch = None
-        self.pitch_pending = False
         self.pitch_calls = 0
         self.pitch_latency_ms = None
         self.pitch_error = ""
+        self.pitch_sample = None
         self.bert_calls = 0
         self.decision_made = False
         self.decision_reason = ""
@@ -54,6 +54,10 @@ class VoicePipelineRunner:
             on_status=self.on_status,
             model_size=C.WHISPER_MODEL_SIZE,
             model_dir=WHISPER_DIR,
+        )
+        self.pitch_tracker = RollingPitchTracker(
+            lambda: self.transcriber.audio_window_before_last_speech(PITCH_WINDOW_SECONDS),
+            token_source=self.transcriber.last_voice_sample,
         )
 
     def on_status(self, text):
@@ -95,34 +99,35 @@ class VoicePipelineRunner:
         print(f"\n[bert] P(complete)={self.last_prob:.3f} ({elapsed:.1f} ms)")
         return self.last_prob
 
-    def track_last_pitch(self):
-        audio = self.transcriber.audio_before_last_speech(PITCH_WINDOW_SECONDS)
-        started = time.monotonic()
-        self.pitch_calls += 1
+    def refresh_pitch(self):
+        state = self.pitch_tracker.snapshot(self.transcriber.last_voice_sample())
+        if state is None:
+            return None
+        self.pitch_calls = self.pitch_tracker.call_count
+        if state["voice_sample"] == self.pitch_sample:
+            return state
 
-        try:
-            self.last_pitch = track_pitch(audio)
-            self.pitch_error = ""
-        except Exception as exc:
-            self.last_pitch = None
-            self.pitch_error = str(exc)
-
-        self.pitch_latency_ms = (time.monotonic() - started) * 1000
+        self.pitch_sample = state["voice_sample"]
+        self.pitch_latency_ms = state.get("latency_ms")
+        self.pitch_error = state.get("error", "")
+        self.last_pitch = state if "contour" in state else None
         if self.pitch_error:
             print(f"\n[pitch] error: {self.pitch_error}")
         elif self.last_pitch is None:
-            print(f"\n[pitch] no voiced F0 detected ({self.pitch_latency_ms:.1f} ms)")
+            latency = self.pitch_latency_ms or 0.0
+            print(f"\n[pitch] no voiced F0 detected ({latency:.1f} ms)")
         else:
             contour = self.last_pitch["contour"]
             print(
                 "\n[pitch] "
                 f"median={self.last_pitch['median']:.2f} Hz "
                 f"final={self.last_pitch['final']:.2f} Hz "
+                f"drop={self.last_pitch['drop_ratio']:.1%} "
+                f"falling={self.last_pitch['falling']} "
                 f"frames={len(contour)} ({self.pitch_latency_ms:.1f} ms)"
             )
-            print("[pitch] contour: " + ", ".join(f"{value:.1f}" for value in contour))
 
-        return self.last_pitch
+        return state
 
     def run(self):
         self.load_models()
@@ -131,9 +136,10 @@ class VoicePipelineRunner:
         self.last_voice_at = self.turn_started_at
 
         print("[status] starting microphone. Speak now; Ctrl+C to stop.")
-        self.transcriber.start()
-
+        print("[status] warming up rolling pitch tracker...")
         try:
+            self.pitch_tracker.start()
+            self.transcriber.start()
             while not self.decision_made:
                 time.sleep(0.05)
                 now = time.monotonic()
@@ -141,7 +147,11 @@ class VoicePipelineRunner:
 
                 if spectrogram(audio_level):
                     self.last_voice_at = now
-                    self.pitch_pending = True
+                callback_voice_at = self.transcriber.last_voice_time()
+                if callback_voice_at:
+                    self.last_voice_at = max(self.last_voice_at, callback_voice_at)
+
+                pitch_state = self.refresh_pitch()
 
                 with self.lock:
                     raw = self.raw_text
@@ -155,16 +165,13 @@ class VoicePipelineRunner:
                 if not raw:
                     continue
 
-                if self.pitch_pending:
-                    self.pitch_pending = False
-                    self.track_last_pitch()
-                    continue
-
                 bert_gate = should_respond(
                     self.last_prob,
                     audio_level=audio_level,
                     silence_duration=silence_duration,
                     required_silence=self.required_silence,
+                    pitch_falling=bool(pitch_state and pitch_state.get("falling")),
+                    pitch_fresh=bool(pitch_state and pitch_state.get("fresh")),
                 )
                 spectrogram_gate = should_respond(
                     0.0,
@@ -182,11 +189,9 @@ class VoicePipelineRunner:
         except KeyboardInterrupt:
             print("\n[status] stopped by user")
             self.decision_reason = "manual_stop"
-            if self.pitch_pending:
-                self.pitch_pending = False
-                self.track_last_pitch()
             self.log_row(time.monotonic(), self.raw_text, 0.0)
         finally:
+            self.pitch_tracker.stop()
             final_text = self.transcriber.stop()
             if final_text:
                 with self.lock:
@@ -209,6 +214,8 @@ class VoicePipelineRunner:
                 "bert_calls": str(self.bert_calls),
                 "pitch_median_hz": self._pitch_value("median"),
                 "pitch_final_hz": self._pitch_value("final"),
+                "pitch_drop_ratio": self._pitch_value("drop_ratio"),
+                "pitch_falling": str(bool(self.last_pitch and self.last_pitch["falling"])),
                 "pitch_frames": str(len(self.last_pitch["contour"])) if self.last_pitch else "0",
                 "pitch_calls": str(self.pitch_calls),
                 "pitch_latency_ms": (

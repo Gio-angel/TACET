@@ -55,6 +55,7 @@ class LiveTranscriber:
         self._level = 0.0           # live mic loudness (RMS), for the UI orb
         self._sample_count = 0
         self._last_voice_sample = 0
+        self._last_voice_at = 0.0
         self._prev_hyp = []         # previous transcription (for LocalAgreement)
         self._committed = []        # words confirmed stable across 2 runs
 
@@ -67,6 +68,7 @@ class LiveTranscriber:
             self._buf = []
             self._sample_count = 0
             self._last_voice_sample = 0
+            self._last_voice_at = 0.0
         self._prev_hyp = []
         self._committed = []
         self._level = 0.0
@@ -102,6 +104,12 @@ class LiveTranscriber:
     def audio_before_last_speech(self, seconds=0.3):
         """Copy the audio window ending at the latest voiced mic block."""
 
+        item = self.audio_window_before_last_speech(seconds)
+        return item[0] if item is not None else None
+
+    def audio_window_before_last_speech(self, seconds=0.3):
+        """Return a recent voiced window and its end-sample freshness token."""
+
         sample_count = int(SAMPLE_RATE * seconds)
         if sample_count <= 0:
             return None
@@ -109,10 +117,31 @@ class LiveTranscriber:
         with self._lock:
             if not self._buf or self._last_voice_sample == 0:
                 return None
-            audio = np.concatenate(self._buf)
-            end = min(self._last_voice_sample, len(audio))
+            end = min(self._last_voice_sample, self._sample_count)
             start = max(0, end - sample_count)
-            return audio[start:end].copy()
+            pieces = []
+            cursor = self._sample_count
+            for block in reversed(self._buf):
+                block_start = cursor - len(block)
+                overlap_start = max(start, block_start)
+                overlap_end = min(end, cursor)
+                if overlap_start < overlap_end:
+                    pieces.append(block[overlap_start - block_start:overlap_end - block_start])
+                if block_start <= start:
+                    break
+                cursor = block_start
+            if not pieces:
+                return None
+            audio = np.concatenate(list(reversed(pieces))).copy()
+            return audio, end
+
+    def last_voice_sample(self):
+        with self._lock:
+            return self._last_voice_sample
+
+    def last_voice_time(self):
+        with self._lock:
+            return self._last_voice_at
 
     # ---- lifecycle ----
     def start(self):
@@ -126,6 +155,7 @@ class LiveTranscriber:
             self._buf = []
             self._sample_count = 0
             self._last_voice_sample = 0
+            self._last_voice_at = 0.0
         self._prev_hyp = []
         self._committed = []
         self._running = True
@@ -138,6 +168,7 @@ class LiveTranscriber:
                 self._sample_count += len(block)
                 if level > C.SPEC_THRESHOLD:
                     self._last_voice_sample = self._sample_count
+                    self._last_voice_at = time.monotonic()
             self._level = level
 
         self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
