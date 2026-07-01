@@ -31,6 +31,7 @@ from frontend.asr import LiveTranscriber       # noqa: E402
 from tacet.encoder import BertEncoder          # noqa: E402
 from tacet.infer import TacetEndpointer        # noqa: E402
 from tacet.gate import should_respond          # noqa: E402
+from tacet import llm, tts                      # noqa: E402
 from voice_mngt.pitch import PITCH_WINDOW_SECONDS, RollingPitchTracker  # noqa: E402
 from voice_mngt.spectrogram import spectrogram # noqa: E402
 
@@ -51,7 +52,7 @@ class Api:
         self.tr = None
         self.encoder = BertEncoder(model_dir=BERT_DIR)
         self.endpointer = None               # loaded lazily on first record
-        self.llm = "ChatGPT"                  # mock selection
+        self.llm = "Gemini"                   # only Gemini is implemented
         self.save_leaks = True               # toggled from the UI
         self._talking = False
         self._last_prob = 0.0
@@ -189,7 +190,7 @@ class Api:
             self._state["committed"] = text
 
     def _encode_loop(self):
-        required_silence = 2000
+        required_silence = 3000
         while self.recording:
             time.sleep(0.1)
             if self._talking:
@@ -207,7 +208,7 @@ class Api:
             if raw and raw != self._last_encoded:
                 prob = self._encode(raw)                      # score the latest words
                 if prob is not None:
-                    required_silence = 800 if prob > C.TAU else 2000
+                    required_silence = 1000 if prob > C.TAU else 3000
             elif raw:
                 silence_duration = now - self._last_voice_time
                 if should_respond(
@@ -262,13 +263,19 @@ class Api:
         return state
 
     def _take_turn(self):
-        # model takes its turn: fade orange, reset the user's sentence, mock-talk, fade back
+        # model takes its turn: fade orange, ask the LLM, speak it, reset, fade back
         if self._talking:
             return
         self._talking = True
-        self._set(talking=True, status="talking...", transcript="", committed="")
+        text = self._raw                                  # what the user said
+        self._set(talking=True, status="thinking...", transcript="", committed="")
         self._reset_turn()
-        time.sleep(TALK_SECONDS)
+        try:
+            answer = llm.reply(text, model=self.llm)      # LLM
+            self._set(status="speaking...")
+            tts.speak(answer)                             # TTS (blocks while speaking)
+        except Exception as e:
+            self._set(error=f"reply error: {e}")
         self._reset_turn()                                # drop anything captured while talking
         self._talking = False
         self._set(talking=False, status="listening...", transcript="", committed="")

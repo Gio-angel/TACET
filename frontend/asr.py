@@ -92,6 +92,7 @@ class LiveTranscriber:
         segments, _ = self._model.transcribe(
             audio, language="en", beam_size=5 if final else 1,
             condition_on_previous_text=False,
+            vad_filter=True,                     # drop non-speech -> no phantom words
         )
         return " ".join(seg.text for seg in segments).strip()
 
@@ -182,6 +183,8 @@ class LiveTranscriber:
             time.sleep(self.partial_every)
             audio = self._current_audio()
             if audio is None or len(audio) < SAMPLE_RATE * MIN_SECONDS:
+                continue
+            if self._last_voice_sample == 0:        # nothing voiced yet -> don't transcribe silence
                 continue
             try:
                 raw = normalize(self._transcribe(audio))

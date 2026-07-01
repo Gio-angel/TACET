@@ -16,5 +16,21 @@ transformers
 # --- packaging  ---
 # pyinstaller
 
-#pitching 
+#pitching
 librosa
+
+# --- LLM API: Gemini (set key in .env) ---
+google-generativeai
+python-dotenv
+
+# --- TTS: natural neural voice (free, no key, needs internet) ---
+edge-tts
+pygame-ce            # prebuilt wheels for new Python; drop-in for pygame
+
+# --- training: metric/plot generation (training/) ---
+matplotlib
+
+# --- dataset tooling (only for utils/ scripts: encode + generate datasets) ---
+pandas
+pyarrow              # read the .parquet seed
+num2words            # spell out numbers when cleaning text
