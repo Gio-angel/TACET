@@ -32,6 +32,20 @@ from tacet.encoder import BertEncoder          # noqa: E402
 from tacet.infer import TacetEndpointer        # noqa: E402
 from tacet.gate import should_respond          # noqa: E402
 from tacet import llm, tts                      # noqa: E402
+
+# greetings the NN scores low but are always complete turns -> force P=1
+_GREETING_WORDS = {"hello", "hi", "hey", "yo", "hiya", "howdy", "morning"}
+_GREETING_PHRASES = ("whats up", "what is up", "can you hear me", "how are you",
+                     "hows it going", "how is it going", "good morning",
+                     "good afternoon", "good evening", "whats good", "are you there",
+                     "is anyone there", "hey there", "nice to meet you")
+
+
+def _is_greeting(text: str) -> bool:
+    words = text.split()
+    if any(w in _GREETING_WORDS for w in words[:3]):
+        return True
+    return any(p in text for p in _GREETING_PHRASES)
 from voice_mngt.pitch import PITCH_WINDOW_SECONDS, RollingPitchTracker  # noqa: E402
 from voice_mngt.spectrogram import spectrogram # noqa: E402
 
@@ -230,6 +244,8 @@ class Api:
         self._last_encoded = text
         self._encode_count += 1
         self._last_prob = self.endpointer.probability(emb)    # wire inference (no decision yet)
+        if _is_greeting(text):                                # greeting override -> complete
+            self._last_prob = 1.0
         self._set(encode_count=self._encode_count, encoded_text=text,
                   prob=round(self._last_prob, 3))
         return self._last_prob

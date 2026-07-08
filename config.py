@@ -25,7 +25,7 @@ PATIENCE = 10      # early-stopping patience on validation loss
 SEED = 42
 
 # --- inference ---
-TAU = 0.58         # decision threshold: P(complete) >= TAU -> take the turn
+TAU = 0.44         # decision threshold: P(complete) >= TAU -> take the turn
 
 SPEC_THRESHOLD = 0.02  # spectrogram/RMS gate: level > threshold -> voice present
 MIN_THRESHOLD = 500
