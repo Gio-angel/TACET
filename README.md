@@ -63,6 +63,11 @@ Create a `.env` file in the project root if you want Gemini responses:
 GOOGLE_API_KEY=your_api_key_here
 ```
 
+HOW TO GET THE API KEY: 
+1. go to https://aistudio.google.com/apps
+2. bottom left: click "Get API Key"
+3. top right: click "Create API key"
+
 Do not commit the `.env` file or any real API keys.
 
 ## Running the application
@@ -73,7 +78,8 @@ Launch the desktop voice interface from the project root:
 python frontend/ui.py
 ```
 
-The first run may download model files unless compatible local models are already available under `models/`.
+note: on your first run bert and whisper are going to download so it might take a while
+
 
 ## Training (ONLY IF YOU HAVE THE DATASET, WHICH YOU DO NOT BY DEFAULT. HOWEVER, THE NN CHECKPOINT IS IN THIS REPO SO YOU CAN RUN THE APP)
 
@@ -158,8 +164,8 @@ tacet\gate.py
 Agentic Frameworks(ClaudeCode):
 voice_mngt\spectogram.py
 voice_mngt\pitch.py --Only track_pitch()
-frontend\index.html
-frontend\style.css
+frontend\web\index.html
+frontend\web\style.css
 ...static parts from the asr & tts modules
 research for text commits in the ui
 generation of a part of the training dataset
