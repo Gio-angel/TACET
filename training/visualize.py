@@ -15,7 +15,7 @@ from tacet.gate import should_respond
 PLOTS_DIR = C.ARTIFACTS / "plots"
 
 
-def _binary_metrics_np(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+def _binary_metrics_np(y_true: np.ndarray, y_pred: np.ndarray):
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     fp = int(((y_pred == 1) & (y_true == 0)).sum())
@@ -28,7 +28,7 @@ def _binary_metrics_np(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
 
 
-def plot_loss_curve(train_losses: list[float], val_losses: list[float], out_path: Path) -> None:
+def plot_loss_curve(train_losses: list[float], val_losses: list[float], out_path: Path):
     epochs = range(1, len(train_losses) + 1)
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(epochs, train_losses, label="Train loss", marker="o", markersize=3)
@@ -43,7 +43,7 @@ def plot_loss_curve(train_losses: list[float], val_losses: list[float], out_path
     plt.close(fig)
 
 
-def plot_decision_metrics(probs: torch.Tensor, labels: torch.Tensor, out_path: Path) -> None:
+def plot_decision_metrics(probs: torch.Tensor, labels: torch.Tensor, out_path: Path):
     #Decision plot: sweep tau (gate threshold) and plot Accuracy, Precision, Recall, F1.
     probs_np = probs.numpy()
     labels_np = labels.numpy().astype(int)
@@ -76,7 +76,7 @@ def plot_decision_metrics(probs: torch.Tensor, labels: torch.Tensor, out_path: P
     plt.close(fig)
 
 
-def plot_confusion_matrix(labels: torch.Tensor, preds: torch.Tensor, out_path: Path) -> None:
+def plot_confusion_matrix(labels: torch.Tensor, preds: torch.Tensor, out_path: Path):
     #2×2 grid: correct vs incorrect predictions at the final epoch.
     y_true = labels.numpy().astype(int)
     y_pred = preds.numpy().astype(int)
@@ -115,7 +115,7 @@ def plot_confusion_matrix(labels: torch.Tensor, preds: torch.Tensor, out_path: P
     plt.close(fig)
 
 
-def plot_probability_histogram(probs: torch.Tensor, labels: torch.Tensor, out_path: Path) -> None:
+def plot_probability_histogram(probs: torch.Tensor, labels: torch.Tensor, out_path: Path):
     #Overlapping histograms of P(complete) for incomplete vs complete samples.
     probs_np = probs.numpy()
     labels_np = labels.numpy().astype(int)
@@ -146,7 +146,7 @@ def plot_probability_histogram(probs: torch.Tensor, labels: torch.Tensor, out_pa
 
 # Update the function declaration inside training/visualize.py:
 
-def visualize_results(train_result: dict, target_plots_dir: Path = PLOTS_DIR) -> bool:
+def visualize_results(train_result: dict, target_plots_dir: Path = PLOTS_DIR):
     """Generate all training diagnostic plots from a completed execution result."""
     if train_result is None:
         print("[ERROR] Cannot visualize — training result is None.")

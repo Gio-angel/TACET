@@ -4,7 +4,7 @@ import config as C
 from training.train import train_model, train_model_finetune
 from training.visualize import visualize_results
 
-def run() -> bool:
+def run():
     args = sys.argv[1:]
     
     if args and args[0] == "finetune":

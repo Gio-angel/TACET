@@ -19,7 +19,7 @@ BATCH_SIZE_FN = 64
 TRAIN_NPZ = ROOT / "data" / "TRAINING_EMBEDDINGS" / "train.npz"
 FINETUNE_NPZ = ROOT / "data" / "FINE_TUNE_EMBEDDINGS" / "fine_tuning_20k.npz"
 
-def _set_seed(seed: int) -> None:
+def _set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -29,7 +29,7 @@ def _make_loader(X: torch.Tensor, y: torch.Tensor, batch_size: int, shuffle: boo
     return DataLoader(TensorDataset(X, y), batch_size=batch_size, shuffle=shuffle)
 
 
-def _binary_metrics(y_true: torch.Tensor, y_pred: torch.Tensor) -> dict:
+def _binary_metrics(y_true: torch.Tensor, y_pred: torch.Tensor):
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     fp = int(((y_pred == 1) & (y_true == 0)).sum())
@@ -91,7 +91,7 @@ def validate(
     return metrics
 
 
-def train_model() -> dict | None:
+def train_model():
     print("=" * 60)
     print("TACET training (80/20 Dynamic Split)")
     print("=" * 60)
@@ -276,7 +276,7 @@ def train_model() -> dict | None:
     
     
 
-def train_model_finetune() -> dict | None:
+def train_model_finetune():
     print("=" * 60)
     print(f"TACET 20k Fine-Tuning Run (80/20 Dynamic Split)")
     print("=" * 60)

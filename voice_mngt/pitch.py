@@ -22,7 +22,6 @@ def track_pitch(
     fmin=PITCH_FMIN,
     fmax=PITCH_FMAX,
 ):
-    """Return YIN pitch features for a mono audio window, or None."""
 
     if audio is None:
         return None
