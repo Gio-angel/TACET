@@ -138,10 +138,12 @@ Some tests require model artifacts, audio hardware, or prepared datasets.
 - Runtime behavior depends on the trained head and the thresholds in `config.py`.
 - See `PACKAGING.md` for application packaging guidance.
 
+- MODELS & LIBRARIES FROM EXTERNAL SOURCES : Referenced in the requirements.txt
+
 ---
 
 # TASK SPLITTING SYNOPSIS:
-Giorgos A. : 
+George A. : 
 tacet\__init__.py
 tacet\data.py
 tacet\encoder.py
@@ -177,7 +179,9 @@ voice_mngt\spectogram.py
 voice_mngt\pitch.py --Only track_pitch()
 frontend\web\index.html
 frontend\web\style.css
-...static parts from the asr & tts modules
+frontend\ui.py -- _start() & _encode_loop()
+frontend\web\app.js -- poll()
+static parts from the asr & tts modules
 research for text commits in the ui
 generation of a part of the training dataset
 ---
