@@ -48,11 +48,22 @@ TACET/
 
 ### Installation
 
-Create and activate a virtual environment, then install the dependencies (Inside the root folder):
+Create and activate a virtual environment, then install the dependencies (Inside the root folder).
 
-```powershell
+**Windows (cmd):**
+
+```bat
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate.bat
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**Linux / macOS (bash):**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
