@@ -75,7 +75,7 @@ python frontend/ui.py
 
 The first run may download model files unless compatible local models are already available under `models/`.
 
-## Training
+## Training (ONLY IF YOU HAVE THE DATASET, WHICH YOU DO NOT BY DEFAULT. HOWEVER, THE NN CHECKPOINT IS IN THIS REPO SO YOU CAN RUN THE APP)
 
 Run the baseline training and visualization pipeline:
 

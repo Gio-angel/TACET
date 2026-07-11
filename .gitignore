@@ -21,9 +21,9 @@ env/
 
 # 3. ML Models, Datasets & Artifacts (UPDATED)
 models/bert/
-artifacts/
+
 frontend/leaks/
-*.pt
+
 *.bin
 *.safetensors
 *.h5
