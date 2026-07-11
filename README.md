@@ -83,7 +83,7 @@ Do not commit the `.env` file or any real API keys.
 
 ## Running the application
 
-Launch the desktop voice interface from the project root:
+Launch the desktop voice interface from the project root (while in the venv):
 
 ```powershell
 python frontend/ui.py
