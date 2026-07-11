@@ -123,7 +123,7 @@ Some tests require model artifacts, audio hardware, or prepared datasets.
 
 ---
 
-# TASK SLITTING SYNOPSIS:
+# TASK SPLITTING SYNOPSIS:
 Giorgos A. : 
 tacet\__init__.py
 tacet\data.py
