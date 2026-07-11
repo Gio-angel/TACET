@@ -48,7 +48,7 @@ TACET/
 
 ### Installation
 
-Create and activate a virtual environment, then install the dependencies:
+Create and activate a virtual environment, then install the dependencies (Inside the root folder):
 
 ```powershell
 python -m venv .venv
