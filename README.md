@@ -137,8 +137,7 @@ frontend\__init__.py
 frontend\asr.py
 frontend\ui.py
 frontend\web\app.js
-frontend\index.html
-frontend\style.css
+
 
 Anastasios A. :
 training\__init__.py
@@ -159,5 +158,9 @@ tacet\gate.py
 Agentic Frameworks(ClaudeCode):
 voice_mngt\spectogram.py
 voice_mngt\pitch.py --Only track_pitch()
-
+frontend\index.html
+frontend\style.css
+...static parts from the asr & tts modules
+research for text commits in the ui
+generation of a part of the training dataset
 ---
